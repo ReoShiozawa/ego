@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>改良版囲碁ゲーム</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background-color: #f0f0f0;
+        }
+        #board {
+            position: relative;
+            width: 570px; /* 30px * 19 = 570px */
+            height: 570px;
+            background-color: #DEB887; /* 囲碁盤の木の色 */
+            border: 2px solid #8b4513;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+            display: grid;
+            grid-template-columns: repeat(19, 30px);
+            grid-template-rows: repeat(19, 30px);
+        }
+        .line {
+            position: absolute;
+            background-color: black;
+        }
+        .horizontal {
+            width: calc(100% - 30px); /* 線が飛び出さないように調整 */
+            height: 1px;
+            left: 15px; /* 左側での位置調整 */
+        }
+        .vertical {
+            height: calc(100% - 30px); /* 線が飛び出さないように調整 */
+            width: 1px;
+            top: 15px; /* 上側での位置調整 */
+        }
+        .hoshi {
+            position: absolute;
+            width: 8px;
+            height: 8px;
+            background-color: black;
+            border-radius: 50%;
+        }
+        .cell {
+            width: 30px;
+            height: 30px;
+            cursor: pointer;
+            position: relative;
+        }
+        .stone {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            position: absolute;
+            top: 1px;
+            left: 1px;
+            box-shadow: 2px 2px 2px rgba(0,0,0,0.3);
+            z-index: 1;
+        }
+        .black {
+            background: radial-gradient(circle at 30% 30%, #666, #000);
+        }
+        .white {
+            background: radial-gradient(circle at 30% 30%, #fff, #ccc);
+        }
+        #controls {
+            margin-top: 20px;
+        }
+        button {
+            margin: 0 5px;
+            padding: 5px 10px;
+            font-size: 16px;
+        }
+        #status, #score {
+            margin-top: 10px;
+            font-size: 18px;
+        }
+        #undo-button {
+            background-color: #8b4513;
+            color: white;
+            padding: 5px 10px;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        #undo-button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div id="board"></div>
+    <div id="controls">
+        <button id="undo-button" disabled>待った</button>
+        <button id="passButton">パス</button>
+        <button id="resignButton">投了</button>
+        <button id="scoreButton">終局</button>
+    </div>
+    <div id="status"></div>
+    <div id="score"></div>
+
+    <script>
+        const BOARD_SIZE = 19;
+        const CELL_SIZE = 30;
+        const board = document.getElementById('board');
+        const passButton = document.getElementById('passButton');
+        const resignButton = document.getElementById('resignButton');
+        const scoreButton = document.getElementById('scoreButton');
+        const statusDiv = document.getElementById('status');
+        const scoreDiv = document.getElementById('score');
+        let currentPlayer = 'black';
+        let gameBoard = Array(BOARD_SIZE).fill().map(() => Array(BOARD_SIZE).fill(null));
+        let koPoint = null;
+        let passCount = 0;
+        let capturedStones = { black: 0, white: 0 };
+        let moveHistory = [];
+
+        // 盤面の作成（セルを追加）
+        for (let i = 0; i < BOARD_SIZE; i++) {
+            for (let j = 0; j < BOARD_SIZE; j++) {
+                const cell = document.createElement('div');
+                cell.className = 'cell';
+                cell.dataset.row = i;
+                cell.dataset.col = j;
+                cell.addEventListener('click', () => placeStone(cell)); // クリックイベント
+                board.appendChild(cell);
+            }
+        }
+
+        // 囲碁盤の線を追加
+        for (let i = 0; i < BOARD_SIZE; i++) {
+            // 横線
+            const horizontalLine = document.createElement('div');
+            horizontalLine.className = 'line horizontal';
+            horizontalLine.style.top = `${i * CELL_SIZE + CELL_SIZE / 2}px`;
+            board.appendChild(horizontalLine);
+
+            // 縦線
+            const verticalLine = document.createElement('div');
+            verticalLine.className = 'line vertical';
+            verticalLine.style.left = `${i * CELL_SIZE + CELL_SIZE / 2}px`;
+            board.appendChild(verticalLine);
+        }
+
+        // 星（hoshi）を追加
+        const HOSHI_POSITIONS = [3, 9, 15];
+        HOSHI_POSITIONS.forEach(row => {
+            HOSHI_POSITIONS.forEach(col => {
+                const hoshi = document.createElement('div');
+                hoshi.className = 'hoshi';
+                hoshi.style.top = `${row * CELL_SIZE + CELL_SIZE / 2 - 4}px`; // 星を正確に配置（-4は中心補正）
+                hoshi.style.left = `${col * CELL_SIZE + CELL_SIZE / 2 - 4}px`; // 星を正確に配置（-4は中心補正）
+                board.appendChild(hoshi);
+            });
+        });
+
+        function saveBoardState() {
+            moveHistory.push({
+                board: gameBoard.map(row => [...row]),
+                currentPlayer: currentPlayer,
+                capturedStones: {...capturedStones},
+                koPoint: koPoint ? [...koPoint] : null
+            });
+            document.getElementById('undo-button').disabled = false;
+        }
+
+        function undoMove() {
+            if (moveHistory.length === 0) return;
+            
+            const lastState = moveHistory.pop();
+            gameBoard = lastState.board;
+            currentPlayer = lastState.currentPlayer;
+            capturedStones = lastState.capturedStones;
+            koPoint = lastState.koPoint;
+            
+            refreshBoard();
+            updateStatus();
+            
+            document.getElementById('undo-button').disabled = moveHistory.length === 0;
+            passCount = 0;
+        }
+
+        function refreshBoard() {
+            const cells = board.querySelectorAll('.cell');
+            cells.forEach(cell => {
+                const row = parseInt(cell.dataset.row);
+                const col = parseInt(cell.dataset.col);
+                cell.innerHTML = '';
+                if (gameBoard[row][col]) {
+                    const stone = document.createElement('div');
+                    stone.className = `stone ${gameBoard[row][col]}`;
+                    cell.appendChild(stone);
+                }
+            });
+        }
+
+        function placeStone(cell) {
+            const row = parseInt(cell.dataset.row);
+            const col = parseInt(cell.dataset.col);
+
+            if (gameBoard[row][col] === null && !isKoViolation(row, col)) {
+                saveBoardState();
+
+                const stone = document.createElement('div');
+                stone.className = `stone ${currentPlayer}`;
+                cell.appendChild(stone);
+
+                gameBoard[row][col] = currentPlayer;
+                passCount = 0;
+
+                const capturedGroups = captureStones(row, col);
+                if (capturedGroups.length === 0 && hasNoLiberties(row, col)) {
+                    moveHistory.pop();
+                    cell.removeChild(stone);
+                    gameBoard[row][col] = null;
+                    return;
+                }
+
+                updateKoPoint(capturedGroups);
+                switchPlayer();
+                updateStatus();
+            }
+        }
+
+        function captureStones(row, col) {
+            const directions = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+            const opponent = currentPlayer === 'black' ? 'white' : 'black';
+            const capturedGroups = [];
+
+            for (const [dx, dy] of directions) {
+                const newRow = row + dx;
+                const newCol = col + dy;
+
+                if (isValidPosition(newRow, newCol) && gameBoard[newRow][newCol] === opponent) {
+                    const group = getGroup(newRow, newCol);
+                    if (hasNoLiberties(newRow, newCol)) {
+                        removeGroup(group);
+                        capturedGroups.push(group);
+                        capturedStones[currentPlayer] += group.length;
+                    }
+                }
+            }
+
+            return capturedGroups;
+        }
+
+        function getGroup(row, col) {
+            const color = gameBoard[row][col];
+            const group = [];
+            const visited = new Set();
+
+            function dfs(r, c) {
+                if (!isValidPosition(r, c) || gameBoard[r][c] !== color || visited.has(`${r},${c}`)) {
+                    return;
+                }
+
+                visited.add(`${r},${c}`);
+                group.push([r, c]);
+
+                dfs(r-1, c);
+                dfs(r+1, c);
+                dfs(r, c-1);
+                dfs(r, c+1);
+            }
+
+            dfs(row, col);
+            return group;
+        }
+
+        function hasNoLiberties(row, col) {
+            const group = getGroup(row, col);
+            return !group.some(([r, c]) => hasAdjacencyLiberties(r, c));
+        }
+
+        function hasAdjacencyLiberties(row, col) {
+            const directions = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+            return directions.some(([dx, dy]) => {
+                const newRow = row + dx;
+                const newCol = col + dy;
+                return isValidPosition(newRow, newCol) && gameBoard[newRow][newCol] === null;
+            });
+        }
+
+        function removeGroup(group) {
+            for (const [row, col] of group) {
+                gameBoard[row][col] = null;
+                const cell = board.children[row * BOARD_SIZE + col];
+                cell.innerHTML = '';
+            }
+        }
+
+        function isValidPosition(row, col) {
+            return row >= 0 && row < BOARD_SIZE && col >= 0 && col < BOARD_SIZE;
+        }
+
+        function isKoViolation(row, col) {
+            return koPoint && koPoint[0] === row && koPoint[1] === col;
+        }
+
+        function updateKoPoint(capturedGroups) {
+            if (capturedGroups.length === 1 && capturedGroups[0].length === 1) {
+                koPoint = capturedGroups[0][0];
+            } else {
+                koPoint = null;
+            }
+        }
+
+        function switchPlayer() {
+            currentPlayer = currentPlayer === 'black' ? 'white' : 'black';
+        }
+
+        function updateStatus() {
+            statusDiv.textContent = `現在の手番: ${currentPlayer === 'black' ? '黒' : '白'} | 黒の捕獲: ${capturedStones.black} | 白の捕獲: ${capturedStones.white}`;
+        }
+
+        passButton.addEventListener('click', () => {
+            saveBoardState();
+            passCount++;
+            if (passCount === 2) {
+                endGame("両プレイヤーがパスしたため、得点計算を行います。");
+            } else {
+                switchPlayer();
+                updateStatus();
+            }
+        });
+
+        resignButton.addEventListener('click', () => {
+            document.getElementById('undo-button').disabled = true;
+            endGame(`${currentPlayer === 'black' ? '黒' : '白'}プレイヤーが投了しました。${currentPlayer === 'black' ? '白' : '黒'}の勝利です。`);
+        });
+
+        scoreButton.addEventListener('click', () => {
+            calculateScore();
+        });
+
+        document.getElementById('undo-button').addEventListener('click', undoMove);
+
+        function endGame(message) {
+            statusDiv.textContent = message;
+            board.style.pointerEvents = 'none';
+            passButton.disabled = true;
+            resignButton.disabled = true;
+            document.getElementById('undo-button').disabled = true;
+            calculateScore();
+        }
+
+        function calculateScore() {
+            const territory = { black: 0, white: 0 };
+            const visited = new Set();
+
+            for (let row = 0; row < BOARD_SIZE; row++) {
+                for (let col = 0; col < BOARD_SIZE; col++) {
+                    if (gameBoard[row][col] === null && !visited.has(`${row},${col}`)) {
+                        const [color, size] = floodFillTerritory(row, col, visited);
+                        if (color) {
+                            territory[color] += size;
+                        }
+                    }
+                }
+            }
+
+            const blackScore = territory.black + capturedStones.black;
+            const whiteScore = territory.white + capturedStones.white + 6.5; // コミ
+
+            scoreDiv.textContent = `最終得点 - 黒: ${blackScore} | 白: ${whiteScore} | ${blackScore > whiteScore ? '黒' : '白'}の勝利`;
+        }
+
+        function floodFillTerritory(row, col, visited) {
+            const queue = [[row, col]];
+            const territory = [];
+            const borders = new Set();
+
+            while (queue.length > 0) {
+                const [r, c] = queue.shift();
+                if (!isValidPosition(r, c) || visited.has(`${r},${c}`)) continue;
+
+                visited.add(`${r},${c}`);
+                if (gameBoard[r][c] === null) {
+                    territory.push([r, c]);
+                    queue.push([r-1, c], [r+1, c], [r, c-1], [r, c+1]);
+                } else {
+                    borders.add(gameBoard[r][c]);
+                }
+            }
+
+            if (borders.size === 1) {
+                return [[...borders][0], territory.length];
+            }
+            return [null, 0];
+        }
+
+        updateStatus();
+    </script>
+</body>
+</html>
